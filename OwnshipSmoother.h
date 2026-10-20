@@ -1,31 +1,20 @@
-#include <deque>
-#include <cmath>
+#pragma once
+
 #include <algorithm>
-
-static uint64_t gFrameNumber = 0;
-
-template <typename T>
-T Lerp(T a, T b, T alpha)
-{
-    return a + (b - a) * alpha;
-}
-
-template <typename T>
-T LerpAngle(T a, T b, T alpha)
-{
-    T delta = std::remainder(b - a, T(360));
-    return Lerp(a, a + delta, alpha);
-}
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <deque>
 
 struct OwnshipFrame
 {
-    uint64_t frameNumber;
-    double Latitude;  // degrees
-    double Longitude; // degrees
-    float Altitude;   // feet
-    float Yaw;        // degrees
-    float Pitch;      // degrees
-    float Roll;       // degrees
+    uint64_t frameNumber = 0;
+    double Latitude = 0.0;
+    double Longitude = 0.0;
+    float Altitude = 0.0f;
+    float Yaw = 0.0f;
+    float Pitch = 0.0f;
+    float Roll = 0.0f;
 
     bool operator==(const OwnshipFrame& other) const
     {
@@ -36,90 +25,119 @@ struct OwnshipFrame
                Pitch == other.Pitch &&
                Roll == other.Roll;
     }
-
-    bool operator!=(const OwnshipFrame& other) const
-    {
-        return !(*this == other);
-    }
+    bool operator!=(const OwnshipFrame& other) const { return !(*this == other); }
 };
 
 class OwnshipSmoother
 {
 public:
-    void AddFrame(OwnshipFrame& frame)
+    // One AddFrame per 60 Hz Host simulation frame.
+    void AddFrame(const OwnshipFrame& frame)
     {
-        frame.frameNumber = ++gFrameNumber;
-        history.push_back(frame);
-
-        while (history.size() > 5)
-            history.pop_front();
+        OwnshipFrame copy = frame;
+        copy.frameNumber = ++frameNumber_;
+        history_.push_back(copy);
+        if (history_.size() > 5)
+            history_.pop_front();
     }
 
-    bool GetOutput(OwnshipFrame& output)
+    // Returns one delayed output for each input after 5 frames of startup.
+    // 2-frame (33.3 ms at 60 Hz) latency.
+    bool GetOutput(OwnshipFrame& output) const
     {
-        constexpr size_t delay = 2;
-
-        if (history.size() <= delay)
+        if (history_.size() < 5)
             return false;
 
-        size_t target = history.size() - 1 - delay;
+        OwnshipFrame corrected[5];
+        for (size_t i = 0; i < 5; ++i)
+            corrected[i] = CorrectDuplicate(i);
 
-        output = history[target];
+        // Symmetric binomial FIR: preserves constant velocity and has no
+        // additional group delay beyond the 2-frame history lookahead.
+        constexpr double weights[5] = {1.0, 4.0, 6.0, 4.0, 1.0};
+        constexpr double denominator = 16.0;
 
-        // Only correct if target equals previous frame.
-        if (target == 0 ||
-            (history[target - 1] != history[target]))
-            return true;
-
-        // Find the previous distinct sample.
-        size_t before = target - 1;
-
-        while (before > 0 &&
-               (history[before - 1] == history[target]))
+        output = history_[2];
+        double lat = 0.0, lon = 0.0, alt = 0.0;
+        for (size_t i = 0; i < 5; ++i)
         {
-            --before;
+            lat += weights[i] * corrected[i].Latitude;
+            lon += weights[i] * corrected[i].Longitude;
+            alt += weights[i] * corrected[i].Altitude;
         }
+        output.Latitude = lat / denominator;
+        output.Longitude = lon / denominator;
+        output.Altitude = static_cast<float>(alt / denominator);
 
-        // Find the next distinct sample.
-        size_t after = target + 1;
-
-        while (after < history.size() &&
-               (history[after] == history[target]))
-        {
-            ++after;
-        }
-
-        if (after >= history.size())
-            return true; // No future sample yet.
-
-        // Interpolate using frame spacing.
-        const auto& a = history[before];
-        const auto& b = history[after];
-
-        double span = static_cast<double>(
-            b.frameNumber - a.frameNumber);
-
-        if (span <= 0.0)
-            return true;
-
-        double alpha =
-            static_cast<double>(
-                output.frameNumber - a.frameNumber) / span;
-
-        alpha = std::clamp(alpha, 0.0, 1.0);
-
-        output.Latitude  = Lerp(a.Latitude, b.Latitude, alpha);
-        output.Longitude = Lerp(a.Longitude, b.Longitude, alpha);
-        output.Altitude  = Lerp(a.Altitude, b.Altitude, (float)alpha);
-
-        output.Yaw   = LerpAngle(a.Yaw, b.Yaw, (float)alpha);
-        output.Pitch = LerpAngle(a.Pitch, b.Pitch, (float)alpha);
-        output.Roll  = LerpAngle(a.Roll, b.Roll, (float)alpha);
-
+        // Smooth wrapped Euler angles around the center sample.
+        output.Yaw = SmoothAngle(corrected, &OwnshipFrame::Yaw);
+        output.Pitch = SmoothAngle(corrected, &OwnshipFrame::Pitch);
+        output.Roll = SmoothAngle(corrected, &OwnshipFrame::Roll);
         return true;
     }
 
-private:
+    void Reset()
+    {
+        history_.clear();
+        frameNumber_ = 0;
+    }
 
-    std::deque<OwnshipFrame> history;
+private:
+    static double Lerp(double a, double b, double t)
+    {
+        return a + (b - a) * t;
+    }
+
+    static double LerpAngle(double a, double b, double t)
+    {
+        return a + std::remainder(b - a, 360.0) * t;
+    }
+
+    OwnshipFrame CorrectDuplicate(size_t index) const
+    {
+        OwnshipFrame result = history_[index];
+        if (index == 0 || history_[index] != history_[index - 1])
+            return result;
+
+        // Find distinct samples bracketing the repeated run.
+        size_t before = index - 1;
+        while (before > 0 && history_[before - 1] == history_[index])
+            --before;
+
+        size_t after = index + 1;
+        while (after < history_.size() && history_[after] == history_[index])
+            ++after;
+
+        if (after == history_.size())
+            return result; // No future distinct sample yet.
+
+        const auto& a = history_[before];
+        const auto& b = history_[after];
+        const double span = double(b.frameNumber - a.frameNumber);
+        if (span <= 0.0)
+            return result;
+        const double t = double(result.frameNumber - a.frameNumber) / span;
+
+        result.Latitude = LerpAngle(a.Latitude, b.Latitude, t);
+        result.Longitude = LerpAngle(a.Longitude, b.Longitude, t);
+        result.Altitude = static_cast<float>(Lerp(double(a.Altitude), double(b.Altitude), t));
+        result.Yaw = static_cast<float>(LerpAngle(a.Yaw, b.Yaw, t));
+        result.Pitch = static_cast<float>(LerpAngle(a.Pitch, b.Pitch, t));
+        result.Roll = static_cast<float>(LerpAngle(a.Roll, b.Roll, t));
+        return result;
+    }
+
+    static float SmoothAngle(const OwnshipFrame (&frames)[5],
+                             float OwnshipFrame::*field)
+    {
+        constexpr double weights[5] = {1.0, 4.0, 6.0, 4.0, 1.0};
+        const double center = frames[2].*field;
+        double sum = 0.0;
+        for (size_t i = 0; i < 5; ++i)
+            sum += weights[i] * (center + std::remainder(double(frames[i].*field) - center, 360.0));
+        return static_cast<float>(std::remainder(sum / 16.0, 360.0));
+    }
+
+    std::deque<OwnshipFrame> history_;
+    uint64_t frameNumber_ = 0;
 };

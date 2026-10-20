@@ -650,6 +650,23 @@ int main(int argc, char* argv[])
                roll_delta[i] = 0.0;
             }
          }
+
+         for (int i = 0, j = 100; j < samples; i++, j++)
+         {
+            lat[i] = lat[j];
+            lat_delta[i] = lat_delta[j];
+            lon[i] = lon[j];
+            lon_delta[i] = lon_delta[j];
+            alt[i] = alt[j];
+            alt_delta[i] = alt_delta[j];
+            heading[i] = heading[j];
+            heading_delta[i] = heading_delta[j];
+            pitch[i] = pitch[j];
+            pitch_delta[i] = pitch_delta[j];
+            roll[i] = roll[j];
+            roll_delta[i] = roll_delta[j];
+         }
+         samples -= 100;
       }
       else
       {
@@ -794,19 +811,19 @@ int main(int argc, char* argv[])
             //ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 60.0, ImGuiCond_Once);         
             //ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 20.0, ImGuiCond_Once);         
 
-            ImPlot::PlotLine("Time Delta", plot_time, time_delta, samples);
+            //ImPlot::PlotLine("Time Delta", plot_time, time_delta, samples);
             //ImPlot::PlotLine("Latitude", plot_time_d, lat, samples);
             //ImPlot::PlotLine("Latitude Delta", plot_time_d, lat_delta, samples);
             //ImPlot::PlotLine("Longitude", plot_time_d, lon, samples);
             //ImPlot::PlotLine("Longitude Delta", plot_time_d, lon_delta, samples);
-            //ImPlot::PlotLine("Altitude", plot_time, alt, samples);
-            //ImPlot::PlotLine("Altitude Delta", plot_time, alt_delta, samples);
+            ImPlot::PlotLine("Altitude", plot_time, alt, samples, offset);
+            ImPlot::PlotLine("Altitude Delta", plot_time, alt_delta, samples, offset);
             //ImPlot::PlotLine("Heading", plot_time, heading, samples);
-            ImPlot::PlotLine("Heading Delta", plot_time, heading_delta, samples);
+            //ImPlot::PlotLine("Heading Delta", plot_time, heading_delta, samples);
             //ImPlot::PlotLine("Pitch", plot_time, pitch, samples);
-            ImPlot::PlotLine("Pitch Delta", plot_time, pitch_delta, samples);
+            //ImPlot::PlotLine("Pitch Delta", plot_time, pitch_delta, samples);
             //ImPlot::PlotLine("Roll", plot_time, roll, samples);
-            ImPlot::PlotLine("Roll Delta", plot_time, roll_delta, samples);
+            //ImPlot::PlotLine("Roll Delta", plot_time, roll_delta, samples);
          }
          ImPlot::EndPlot();
       }
